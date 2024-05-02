@@ -1,22 +1,21 @@
 # Boshy Bot
 from ReadWriteMemory import ReadWriteMemory
 from matplotlib.colors import Normalize
+from torch import nn, optim, tensor
 from gymnasium import Env, spaces
 from os import getcwd, path
 from tqdm import tqdm
-from torch import nn, optim
 
 from matplotlib import pyplot as plt
 from torch.nn import functional as f
 
+import pygetwindow as gw
 import numpy as np
 
 import subprocess
 import keyboard
-import random
 import torch
 import time
-import json
 
 MAX_X = 3000
 MAX_Y = 1000
@@ -24,13 +23,67 @@ X_RESOLUTION = 20
 Y_RESOLUTION = 20
 
 class BoshyAgent:
-    def __init__(self):
-        self.actions = ["NOOP", "LEFT", "RIGHT", "JUMP", "SHOOT"]
-        self.attempts = []
-        self.current_attempt = []
-        self.rewards = []
-        self.jump_frames = 0
-        self.jumping = 0
+    def __init__(self, gamma, epsilon, alpha, input_dims, batch_size, n_actions, max_mem_size=100000,
+                 eps_min=0.01, eps_dec=5e-4):
+        self.gamma = gamma
+        self.epsilon = epsilon
+        self.eps_min = eps_min
+        self.eps_dec = eps_dec
+        self.alpha = alpha
+        self.actio_space = [i for i in range(n_actions)]
+        self.mem_size = max_mem_size
+        self.batch_size = batch_size
+        self.mem_cntr = 0
+
+        self.Q_eval = QNet(self.alpha, n_actions=n_actions, input_dims=input_dims, fc1_dims=128, fc2_dims=128)
+        self.state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
+        self.new_state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
+        self.action_memory = np.zeros(self.mem_size, dtype=np.int32)
+        self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
+        self.terminal_memory = np.zeros(self.mem_size, bool)
+
+    def store_transition(self, state, action, reward, state_, done):
+        index = self.mem_cntr % self.mem_size
+        self.state_memory[index] = state
+        self.new_state_memory[index] = state_
+        self.reward_memory[index] = reward
+        self.action_memory[index] = action
+        self.terminal_memory[index] = done
+        self.mem_cntr += 1
+
+    def choose_action(self, observation):
+        if np.random.random() > self.epsilon:
+            state = tensor([observation], dtype=torch.float32).to(self.Q_eval.device)
+            actions = self.Q_eval.forward(state)
+            action = torch.argmax(actions).item()
+        else:
+            action = np.random.choice(self.actio_space)
+        return action
+
+    def learn(self, print_):
+        if self.mem_cntr < self.batch_size:
+            return
+        self.Q_eval.optimizer.zero_grad()
+        max_mem = min(self.mem_cntr, self.mem_size)
+        batch = np.random.choice(max_mem, self.batch_size, replace=False)
+        batch_index = np.arange(self.batch_size, dtype=np.int32)
+        state_batch = tensor(self.state_memory[batch]).to(self.Q_eval.device)
+        new_state_batch = tensor(self.new_state_memory[batch]).to(self.Q_eval.device)
+        reward_batch = tensor(self.reward_memory[batch]).to(self.Q_eval.device)
+        terminal_batch = tensor(self.terminal_memory[batch]).to(self.Q_eval.device)
+        action_batch = self.action_memory[batch]
+
+        q_eval = self.Q_eval.forward(state_batch)[batch_index, action_batch]
+        q_next = self.Q_eval.forward(new_state_batch)
+        q_next[terminal_batch] = 0.0
+        q_target = reward_batch + self.gamma * torch.max(q_next, dim=1)[0]
+
+        loss = self.Q_eval.loss(q_target, q_eval).to(self.Q_eval.device)
+        if print_:
+            print(loss)
+        loss.backward()
+        self.Q_eval.optimizer.step()
+        self.epsilon = self.epsilon - self.eps_dec if self.epsilon > self.eps_min else self.eps_min
 
     @staticmethod
     def act(action):
@@ -50,6 +103,7 @@ class BoshyAgent:
             keyboard.press('z')
         else:
             keyboard.release('z')
+
 
 class BoshyEnv(Env):
     def __init__(self):
@@ -134,14 +188,14 @@ class BoshyEnv(Env):
         penalty_squares = [[1525, 350, 500, 100, 100]]
         penalty = 0
         if not done:
-            self.x = x // X_RESOLUTION
+            self.x = x // X_RESOLUTION + ((action & 2) >> 2) - (action & 1)
             self.y = y // Y_RESOLUTION
             for square in penalty_squares:
                 if in_square(self.x, self.y, square):
                     penalty += square[4]
-                if x > 1200:
+                if x > 1300:
                     penalty += self.y * 3
-        return (self.x, self.y), self.x - penalty, done, False, {}
+        return (self.x, self.y), self.x * 3 - penalty, done, False, {}
 
     def reset(self, seed=None, options=None):
         keyboard.release("z")
@@ -152,7 +206,7 @@ class BoshyEnv(Env):
         self.read_process()
         self.x = int(self.process.read(self.x_pointer) / X_RESOLUTION)
         self.y = int(self.process.read(self.y_pointer) / Y_RESOLUTION)
-        return (self.x, self.y), None
+        return np.array([self.x, self.y], dtype=np.float32)
 
     def render(self):
         pass
@@ -162,25 +216,20 @@ class BoshyEnv(Env):
 
 
 class QNet(nn.Module):
-    def __init__(self):
+    def __init__(self, lr, input_dims, fc1_dims, fc2_dims, n_actions):
         super(QNet, self).__init__()
-        self.fc1 = nn.Linear(2, 16)
-        self.fc2 = nn.Linear(16, 16)
-        self.fc3 = nn.Linear(16, 16)
+        self.fc1 = nn.Linear(*input_dims, fc1_dims)
+        self.fc2 = nn.Linear(fc1_dims, fc2_dims)
+        self.fc3 = nn.Linear(fc2_dims, n_actions)
+        self.optimizer = optim.Adam(self.parameters(), lr=lr)
+        self.loss = nn.MSELoss()
+        self.device = torch.device("cuda:0")
+        self.to(self.device)
 
     def forward(self, x):
-        x = self.fc1(x)
-        x = f.relu(x)
-        x = self.fc2(x)
-        x = f.relu(x)
-        x = self.fc3(x)
-        output = f.log_softmax(x, dim=1)
-        return output
-
-    def backward(self, loss):
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimized.step()
+        x = f.relu(self.fc1(x))
+        x = f.relu(self.fc2(x))
+        return self.fc3(x)
 
 
 def in_square(x, y, square):
@@ -188,14 +237,10 @@ def in_square(x, y, square):
     result = result and x <= (square[0] + square[2]) / X_RESOLUTION
     return result and y <= (square[1] + square[3]) / Y_RESOLUTION
 
-def deep_q_learning():
+
+def q_learning():
     env = BoshyEnv()
     q_table = np.zeros((MAX_X // X_RESOLUTION, MAX_Y // Y_RESOLUTION, 32))
-    device = torch.device("cuda")
-    q_net = QNet().to(device)
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(q_net.parameters(), lr=0.01)
-
     prior_knowledge = [[1510, 360, 500, 100, -100], [1450, 250, 200, 70, 100]]
 
     for i in tqdm(range(MAX_X // X_RESOLUTION), desc="Initializing..."):
@@ -248,7 +293,8 @@ def deep_q_learning():
                 new_value = (1 - alpha) * old_value + alpha * ((1 - gamma) * float(reward1) + gamma * next_max)
                 q_table[state[0], state[1], action1] = new_value
                 # if new_value > old_value:
-                    # print(state[0], state[1], old_value, reward1, next_max, action1, np.argmax(q_table[next_state[0], next_state[1]]), new_value)
+                # print(state[0], state[1], old_value, reward1, next_max, action1, np.argmax(q_table[next_state[0],
+                # next_state[1]]), new_value)
                 # print(q_table[76, 19, 2])
 
                 state = next_state
@@ -274,24 +320,98 @@ def deep_q_learning():
     env.close()
 
 
-def train(model, env, device, criterion, optimizer, epoch):
+def deep_q_learning():
+    env = BoshyEnv()
+    agent = BoshyAgent()
+    device = torch.device("cuda")
+    q_net = QNet().to(device)
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(q_net.parameters(), lr=0.1)
+
+    plt.axis((0, 10, 0, 1))
+    env.run()
+    for epoch in range(1):
+        env.reset()
+        time.sleep(1)
+        train(q_net, env, agent, device, criterion, optimizer, epoch)
+
+    plt.show()
+    env.close()
+
+
+def train(model, env, agent, device, criterion, optimizer, epoch):
     model.train()
     running_loss = 0.0
-    done = False
-    action = 0
     duration = 0
+    next_state, reward, done, _, _ = env.step(0)
+    plt.ion()
+    plt.title("Initializing...")
+    plt.gcf().canvas.draw_idle()
+    plt.gcf().canvas.flush_events()
+    plt.pause(0.001)
+    win = gw.getWindowsWithTitle("I Wanna Be The Boshy")[0]
+    win.activate()
+    targets = tensor(np.zeros(1000) + MAX_X**2).to(device)
+    rewards = tensor(np.zeros(1000)).to(device)
     while not done:
         duration += 1
-        next_state, reward, done, _, _ = env.step(action)
-        action = model(next_state)
+        next_state = torch.tensor(next_state).float().to(device)
+        action = int(model(next_state))
         optimizer.zero_grad()
-        loss = criterion(MAX_X, reward)
+        agent.act(action)
+        next_state, reward, done, _, _ = env.step(action)
+        reward = torch.tensor([float(reward)], requires_grad=True).to(device)
+        rewards = torch.cat((rewards[1:], reward))
+        loss = criterion(rewards, targets)
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
-        if duration % 500 == 0:
-            print(f'Epoch {epoch}, Step {duration}, Loss: {running_loss / 200:.4f}')
+        if duration % 200 == 0:
+            print(f'Epoch {epoch}, Step {duration}, Loss: {loss / 200:.4f}')
+        if duration % 10 == 0:
+            plt.gcf().clear()
+            data = tensor(np.zeros((1, 256))).to(device)
+            for layer in [model.fc1, model.fc2, model.fc3]:
+                w = layer.weight.clone().detach()
+                b = layer.bias.clone().detach()
+                layer_weights = tensor([]).to(device)
+                for inputs in range(w.shape[1]):
+                    input_weights = w[:, inputs].repeat_interleave(int(256 / w.nelement()))
+                    layer_weights = torch.cat((layer_weights, input_weights))
+                data = torch.cat((data, layer_weights.unsqueeze(0)))
+            data = data.cpu().numpy().transpose()
+            plt.rcParams['figure.max_open_warning'] = 0
+            plt.gca().imshow(data, cmap='viridis', interpolation='none')  # Change the colormap as needed
+            plt.gca().set_aspect("auto")
+            plt.title('Random Data Visualization')
+            plt.gcf().canvas.draw_idle()
+            plt.gcf().canvas.flush_events()
+            env.read_process()
+    plt.ioff()
 
 
 if __name__ == "__main__":
-    q_learning()
+    env = BoshyEnv()
+    agent = BoshyAgent(gamma=0.9, epsilon=1.0, batch_size=64, n_actions=16, eps_min=0.01, input_dims=[2], alpha=0.00003)
+    scores, eps_history = [], []
+    score = 0
+    done = False
+    env.run()
+    observation = env.reset()
+    duration = 0
+    while not done and duration < 2000:
+        action = agent.choose_action(observation)
+        agent.act(action)
+        observation_, reward, done, info, _ = env.step(action)
+        score += reward
+        agent.store_transition(observation, action, reward, observation_, done)
+        if duration % 100 == 0:
+            print(duration)
+            agent.learn(True)
+        observation = observation_
+        duration += 1
+    scores.append(score)
+    eps_history.append(agent.epsilon)
+    avg_score = np.mean(scores[-100:])
+    env.close()
