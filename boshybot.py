@@ -9,6 +9,7 @@ from tqdm import tqdm
 from matplotlib import pyplot as plt
 from torch.nn import functional as f
 
+import torch.nn.utils as nn_utils
 import pygetwindow as gw
 import numpy as np
 
@@ -19,8 +20,8 @@ import time
 
 MAX_X = 3000
 MAX_Y = 1000
-X_RESOLUTION = 20
-Y_RESOLUTION = 20
+X_RESOLUTION = 2
+Y_RESOLUTION = 2
 
 class BoshyAgent:
     def __init__(self, gamma, epsilon, alpha, input_dims, batch_size, n_actions, max_mem_size=100000,
@@ -35,7 +36,7 @@ class BoshyAgent:
         self.batch_size = batch_size
         self.mem_cntr = 0
 
-        self.Q_eval = QNet(self.alpha, n_actions=n_actions, input_dims=input_dims, fc1_dims=128, fc2_dims=128)
+        self.Q_eval = QNet(self.alpha, n_actions=n_actions, input_dims=input_dims, fc1_dims=2, fc2_dims=2)
         self.state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
         self.new_state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
         self.action_memory = np.zeros(self.mem_size, dtype=np.int32)
@@ -58,6 +59,8 @@ class BoshyAgent:
             action = torch.argmax(actions).item()
         else:
             action = np.random.choice(self.actio_space)
+        if (action & 3) == 3:
+            action -= 1
         return action
 
     def learn(self, print_):
@@ -79,11 +82,11 @@ class BoshyAgent:
         q_target = reward_batch + self.gamma * torch.max(q_next, dim=1)[0]
 
         loss = self.Q_eval.loss(q_target, q_eval).to(self.Q_eval.device)
-        if print_:
-            print(loss)
+        print("| || || |L :", loss)
         loss.backward()
         self.Q_eval.optimizer.step()
         self.epsilon = self.epsilon - self.eps_dec if self.epsilon > self.eps_min else self.eps_min
+        graph_net(self.Q_eval, 32)
 
     @staticmethod
     def act(action):
@@ -187,6 +190,7 @@ class BoshyEnv(Env):
         done = (y == 0 or y == 8)
         penalty_squares = [[1525, 350, 500, 100, 100]]
         penalty = 0
+        reward = x // X_RESOLUTION - self.x
         if not done:
             self.x = x // X_RESOLUTION + ((action & 2) >> 2) - (action & 1)
             self.y = y // Y_RESOLUTION
@@ -195,7 +199,7 @@ class BoshyEnv(Env):
                     penalty += square[4]
                 if x > 1300:
                     penalty += self.y * 3
-        return (self.x, self.y), self.x * 3 - penalty, done, False, {}
+        return (self.x, self.y), self.x - penalty, done, False, {}
 
     def reset(self, seed=None, options=None):
         keyboard.release("z")
@@ -219,8 +223,11 @@ class QNet(nn.Module):
     def __init__(self, lr, input_dims, fc1_dims, fc2_dims, n_actions):
         super(QNet, self).__init__()
         self.fc1 = nn.Linear(*input_dims, fc1_dims)
+        nn.init.xavier_normal_(self.fc1.weight)
         self.fc2 = nn.Linear(fc1_dims, fc2_dims)
+        nn.init.xavier_normal_(self.fc1.weight)
         self.fc3 = nn.Linear(fc2_dims, n_actions)
+        nn.init.xavier_normal_(self.fc1.weight)
         self.optimizer = optim.Adam(self.parameters(), lr=lr)
         self.loss = nn.MSELoss()
         self.device = torch.device("cuda:0")
@@ -370,45 +377,66 @@ def train(model, env, agent, device, criterion, optimizer, epoch):
         if duration % 200 == 0:
             print(f'Epoch {epoch}, Step {duration}, Loss: {loss / 200:.4f}')
         if duration % 10 == 0:
-            plt.gcf().clear()
-            data = tensor(np.zeros((1, 256))).to(device)
-            for layer in [model.fc1, model.fc2, model.fc3]:
-                w = layer.weight.clone().detach()
-                b = layer.bias.clone().detach()
-                layer_weights = tensor([]).to(device)
-                for inputs in range(w.shape[1]):
-                    input_weights = w[:, inputs].repeat_interleave(int(256 / w.nelement()))
-                    layer_weights = torch.cat((layer_weights, input_weights))
-                data = torch.cat((data, layer_weights.unsqueeze(0)))
-            data = data.cpu().numpy().transpose()
-            plt.rcParams['figure.max_open_warning'] = 0
-            plt.gca().imshow(data, cmap='viridis', interpolation='none')  # Change the colormap as needed
-            plt.gca().set_aspect("auto")
-            plt.title('Random Data Visualization')
-            plt.gcf().canvas.draw_idle()
-            plt.gcf().canvas.flush_events()
+            graph_net(model, 256)
             env.read_process()
     plt.ioff()
 
 
+def graph_net(net, max_layer_size):
+    device = net.device
+    plt.gcf().clear()
+    weight_data = tensor([]).to(device)
+    bias_data = tensor([]).to(device)
+    for layer in [net.fc1, net.fc2, net.fc3]:
+        w = layer.weight.clone().detach()
+        b = layer.bias.clone().detach()
+        weights = tensor([]).to(device)
+        for inputs in range(w.shape[1]):
+            input_weights = w[:, inputs].repeat_interleave(int(max_layer_size / w.nelement()))
+            weights = torch.cat((weights, input_weights))
+        weight_data = torch.cat((weight_data, weights.unsqueeze(0)))
+        b = b.repeat_interleave(int(max_layer_size / b.nelement()))
+        bias_data = torch.cat((bias_data, b.unsqueeze(0)))
+    weight_data = weight_data.cpu().numpy().transpose()
+    bias_data = bias_data.cpu().numpy().transpose()
+    plt.gcf().subplots(2, 1)
+    plt.gcf().axes[0].imshow(weight_data, cmap='viridis', interpolation='none')
+    plt.gcf().axes[0].set_aspect("auto")
+    plt.gcf().axes[1].imshow(bias_data, interpolation='none')
+    plt.gcf().axes[1].set_aspect("auto")
+    plt.gcf().canvas.draw_idle()
+    plt.gcf().canvas.flush_events()
+
+
 if __name__ == "__main__":
     env = BoshyEnv()
-    agent = BoshyAgent(gamma=0.9, epsilon=1.0, batch_size=64, n_actions=16, eps_min=0.01, input_dims=[2], alpha=0.00003)
+    agent = BoshyAgent(gamma=0.9, epsilon=1.0, batch_size=64, n_actions=16, eps_min=0.01, input_dims=[2], alpha=0.5)
     scores, eps_history = [], []
     score = 0
     done = False
     env.run()
     observation = env.reset()
+    plt.ion()
+    fig, axes = plt.subplots(2, 1)
+    plt.title("Initializing...")
+    plt.gcf().canvas.draw_idle()
+    plt.gcf().canvas.flush_events()
+    plt.pause(0.001)
+    win = gw.getWindowsWithTitle("I Wanna Be The Boshy")[0]
+    win.activate()
     duration = 0
-    while not done and duration < 2000:
+    while not done and duration < 1500:
         action = agent.choose_action(observation)
         agent.act(action)
         observation_, reward, done, info, _ = env.step(action)
         score += reward
         agent.store_transition(observation, action, reward, observation_, done)
-        if duration % 100 == 0:
-            print(duration)
+        if duration % 20 == 0:
+            env.read_process()
             agent.learn(True)
+        if duration % 200 == 0:
+            print(duration)
+            time.sleep(2)
         observation = observation_
         duration += 1
     scores.append(score)
