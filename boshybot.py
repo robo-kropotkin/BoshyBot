@@ -1,12 +1,13 @@
 # Boshy Bot
 from ReadWriteMemory import ReadWriteMemory, ReadWriteMemoryError
 from torch import nn, optim, tensor
-from gymnasium import Env, spaces
+from gymnasium import Env
 from os import getcwd, path
 
 from matplotlib import pyplot as plt
 from torch.nn import functional as f
 from datetime import datetime, timedelta
+from time import sleep
 
 import pygetwindow as gw
 import numpy as np
@@ -22,25 +23,19 @@ MAX_Y = 1000
 torch.set_printoptions(precision=2)
 
 class BoshyAgent:
-    def __init__(self, gamma, epsilon, lr, input_dims, batch_size, n_actions, max_mem_size=100000,
-                 eps_min=0.01, eps_dec=1e-3, gain=(1, 1, 1), graph=False, epsilon_min_actions=700):
+    def __init__(self, gamma, lr, input_dims, batch_size, n_actions, max_mem_size=100000,
+                 gain=(1, 1, 1), graph=False, exploration_factor=0.3):
         self.gamma = gamma
-        self.epsilon = self.eps_max = epsilon
-        self.eps_min = eps_min
-        self.eps_dec = eps_dec
-        self.epsilon_min_actions = epsilon_min_actions
-        self.epsilon_min_actions_ = 0
         self.lr = lr
-        self.actio_space = [i for i in range(n_actions)]
+        self.exploration_factor = exploration_factor
+        self.graph = graph
         self.mem_size = max_mem_size
+
         self.batch_size = batch_size
         self.mem_cntr = 0
         self.min_loss = tensor(torch.inf)
-        self.graph = graph
 
-        self.Q_eval = QNet(self.lr, n_actions=n_actions, input_dims=input_dims, gain=gain)
-        # self.scheduler1 = optim.lr_scheduler.ExponentialLR(self.Q_eval.optimizer1, gamma=0.9)
-        # self.scheduler2 = optim.lr_scheduler.ExponentialLR(self.Q_eval.optimizer2, gamma=0.9)
+        self.Q_eval = QNet(self.lr, n_actions=n_actions, input_dims=input_dims)
         self.state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
         self.new_state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
         self.action_memory = np.zeros(self.mem_size, dtype=np.int32)
@@ -60,13 +55,14 @@ class BoshyAgent:
         self.terminal_memory[index] = done
         self.mem_cntr += 1
 
-    def choose_action(self, observation):
-        if np.random.random() > self.epsilon:
-            state = tensor(observation, dtype=torch.float32).to(self.Q_eval.device)
-            actions = self.Q_eval.forward(state)
-            action = torch.argmax(actions).item()
-        else:
-            action = np.random.choice(self.actio_space)
+    def choose_action(self, observation, iteration):
+        state = tensor(observation, dtype=torch.float32).to(self.Q_eval.device)
+        actions = self.Q_eval.forward(state)
+        action_mem = tensor(self.action_memory[:self.mem_cntr + 1], dtype=torch.float32).to(self.Q_eval.device)
+        memory_hist = torch.histc(action_mem, bins=actions.size(0), min=-1e-8, max=actions.size(0) + 1e-8)
+        ucb = self.exploration_factor * torch.sqrt(iteration / memory_hist)
+
+        action = torch.argmax(actions + ucb).item()
         return action
 
     def learn(self, verbose=False):
@@ -109,24 +105,16 @@ class BoshyAgent:
         loss.backward()
         self.Q_eval.optimizer.step()
 
-        if self.epsilon > self.eps_min:
-            self.epsilon -= self.eps_dec
-
         if self.graph:
             graph_net(self.Q_eval, 1024 ** 2 * 5)
 
 class QNet(nn.Module):
-    def __init__(self, lr, input_dims, n_actions, gain):
+    def __init__(self, lr, input_dims, n_actions):
         super(QNet, self).__init__()
-        self.fc1 = nn.Linear(*input_dims, 16)
-        self.fc2 = nn.Linear(16, 64)
-        self.fc3 = nn.Linear(64, n_actions)
-        self.fc1.weight = nn.init.xavier_uniform_(self.fc1.weight, gain=gain[0])
-        self.fc2.weight = nn.init.xavier_uniform_(self.fc2.weight, gain=gain[0])
-        self.fc3.weight = nn.init.xavier_uniform_(self.fc3.weight, gain=gain[0])
-        with torch.no_grad():
-            for i in range(3, n_actions, 4):
-                self.fc3.bias[i] = -1
+        self.fc1 = nn.Linear(*input_dims, 2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.fc3 = nn.Linear(1024, n_actions)
+        self.init_weights()
         self.optimizer = optim.Adam(self.parameters(), lr=lr)
         self.warmup = optim.lr_scheduler.LinearLR(self.optimizer, start_factor=0.001, end_factor=1, total_iters=1000)
         self.scheduler2 = optim.lr_scheduler.ExponentialLR(self.optimizer, gamma=0.993)
@@ -137,9 +125,15 @@ class QNet(nn.Module):
         self.to(self.device)
 
     def forward(self, x):
-        x = f.relu(self.fc1(x))
-        x = f.relu(self.fc2(x))
+        x = f.leaky_relu(self.fc1(x))
+        x = f.leaky_relu(self.fc2(x))
         return self.fc3(x)
+
+    def init_weights(self):
+        nn.init.xavier_uniform_(self.fc1.weight)
+        nn.init.xavier_uniform_(self.fc2.weight)
+        nn.init.xavier_uniform_(self.fc3.weight)
+        nn.init.constant_(self.fc3.bias, 0)
 
 class BoshyEnv(Env):
     def __init__(self):
@@ -151,10 +145,10 @@ class BoshyEnv(Env):
         self.y_pointer = 0
         self.x = 0
         self.y = 0
-        self.exploration_bonus = np.array([])
         self.ebd = 3
-        self.j_streak = 0
+        self.j_streak = 1e-8
         self.steps = 0
+        self.observation_gain = np.array([])
 
     def reset(self, seed=None, options=None):
         pyautogui.moveTo(3500, 10)
@@ -166,15 +160,15 @@ class BoshyEnv(Env):
         time.sleep(0.03)
         keyboard.release("r")
         self.read_process()
-        self.exploration_bonus = np.ones((MAX_X // self.ebd, MAX_Y // self.ebd))
-        self.j_streak = 0
+        self.j_streak = 1e-8
         self.steps = 0
+        self.observation_gain = np.ones(6)
 
         keyboard.press("right")
         time.sleep(3.6)
         keyboard.release("right")
         pyautogui.moveTo(3500, 10)
-        return self.x, self.y, 0, 0, 0, 0
+        return np.array((self.x, self.y, 0, 0, 0, 0))
 
     def run(self):
         self.process_handle = subprocess.Popen(path.join(getcwd(), r"..\IWBTB\I Wanna Be The Boshy.exe"))
@@ -227,7 +221,7 @@ class BoshyEnv(Env):
         keyboard.release("enter")
 
     def step(self, action):
-        self.j_streak += 300
+        self.j_streak += 1
         self.j_streak *= action >> 3 & 1
         old_x = self.x
         old_y = self.y
@@ -240,11 +234,13 @@ class BoshyEnv(Env):
         done = (self.y == 0 or self.y == 8)
         delta_x = self.x - old_x
         delta_y = self.y - old_y
-        reward = self.x * 5 / MAX_X - self.steps / 10
-        reward += self.exploration_bonus[self.x // self.ebd, self.y // self.ebd]
-        self.exploration_bonus[self.x // self.ebd, self.y // self.ebd] -= 0.1
+        reward = np.sqrt(self.x / MAX_X) + self.x / MAX_X
         self.steps += 1
-        return (self.x, self.y, delta_x * 100, delta_y * 100, self.j_streak, self.steps), reward, done, False, {}
+        observation = np.array((self.x, self.y, delta_x, delta_y, self.j_streak, self.steps))
+        observation_gain_ = (1 - 1 / self.steps) * self.observation_gain
+        observation_ = 1 / self.steps / np.abs(observation + (observation == 0))
+        self.observation_gain = observation_gain_ + observation_
+        return observation * self.observation_gain, reward, done, False, {}
 
     def render(self):
         pass
@@ -314,42 +310,46 @@ if __name__ == "__main__":
         if graph:
             setup_graph()
         epochs = 10
-        epoch_duration = 60
+        epoch_duration = 20
         losses, x, times_to_goal = [], [], []
         action_delay = 0.125
         action_delay_multiplier = 1
-        epsilon = 1.0
-        epsilon_multiplier = np.power(0.2, 1 / 40)
         batch_size = 32
         lr = 0.0003
+        exploration_factor = 0.02
+        ef_multiplier = 5
         observation = env.reset()
-        agent = BoshyAgent(gamma=0.99, epsilon=epsilon, batch_size=batch_size, n_actions=16, eps_min=0.0,
-                           input_dims=[len(observation)], lr=lr, gain=(0.1, 1, 1), graph=graph, eps_dec=1e-3,
-                           max_mem_size=1000)
+        agent = BoshyAgent(gamma=0.99, batch_size=batch_size, n_actions=16,
+                           input_dims=[len(observation)], lr=lr, gain=(0.1, 1, 1), graph=graph,
+                           max_mem_size=10000, exploration_factor=exploration_factor)
+        best_weights = agent.Q_eval.state_dict()
         for epoch in range(epochs):
             time_to_goal = timedelta.max
             max_x = 0
             try:
                 if tuning:
-                    agent = BoshyAgent(gamma=0.99, epsilon=epsilon*epsilon_multiplier**epoch, batch_size=batch_size,
-                                       n_actions=16, eps_min=0.01, input_dims=[len(observation)], lr=lr, gain=(0.1, 1, 1),
-                                       graph=graph, eps_dec=1e-3, max_mem_size=1000)
+                    agent = BoshyAgent(gamma=0.99, batch_size=batch_size, n_actions=16, input_dims=[len(observation)],
+                                       lr=lr, gain=(0.1, 1, 1), graph=graph, max_mem_size=1000,
+                                       exploration_factor=exploration_factor*ef_multiplier**epoch)
+                # elif epoch == epochs - 1:
+                #     agent.Q_eval.load_state_dict(best_weights)
+                # else:
+                #     agent.Q_eval.init_weights()
                 iteration = 1
                 done = False
                 start_time = datetime.now()
                 print("Begin epoch:", epoch + 1)
                 if tuning:
-                    print("Epsilon = ", epsilon*epsilon_multiplier**epoch)
+                    print("Yee boi")
                 while not done and (datetime.now() - start_time).total_seconds() < epoch_duration:
-                    action = agent.choose_action(observation)
-                    if action & 3 == 3:
-                        action -= 1
+                # while (datetime.now() - start_time).total_seconds() < epoch_duration:  # Use while debugging
+                    action = agent.choose_action(observation, iteration)
 
                     keyboard_input(action)
 
                     start_of_delay = datetime.now()
-                    while (datetime.now() - start_of_delay).total_seconds() <\
-                            action_delay*action_delay_multiplier**epoch:
+                    while (datetime.now() - start_of_delay).total_seconds() < \
+                            action_delay * action_delay_multiplier ** epoch:
                         agent.learn()
 
                     observation_, reward, done, info, _ = env.step(action)
@@ -362,7 +362,7 @@ if __name__ == "__main__":
                     if iteration == 4 * batch_size and tuning:
                         env.reset()
 
-                    if iteration % (batch_size * 2) == 0:
+                    if iteration % batch_size == 0:
                         print("Duration: ", datetime.now() - start_time)
                         agent.learn(verbose=True)
                         print("Reward: ", reward)
@@ -379,16 +379,20 @@ if __name__ == "__main__":
                 print("Interrupted. How wude.")
                 break
             finally:
-                losses.append(agent.min_loss.cpu().detach().numpy().item())
+                current_loss = agent.min_loss.cpu().detach().numpy().item()
+                losses.append(current_loss)
+                if current_loss < np.min(losses):
+                    best_weights = agent.Q_eval.state_dict()
                 x.append(max_x)
                 times_to_goal.append(time_to_goal)
+
         plt.ioff()
         plt.gca().clear()
         print("Final Scores:")
         for i in range(len(losses)):
             if tuning:
-                print("For ", epsilon*epsilon_multiplier**i)
-            print("Loss is:", losses[i], "Max X is:", x[i], "Time to subgoal is:", times_to_goal[i])
+                print("For exploration factor:", exploration_factor*ef_multiplier**i)
+            print("Lowest loss is:", losses[i], "Max X is:", x[i], "Time to subgoal is:", times_to_goal[i])
     except RuntimeError as e:
         raise e
     finally:
