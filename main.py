@@ -60,7 +60,7 @@ def play(agent, action_delay, epoch=0):
     start_time = datetime.now()
     while not done and (datetime.now() - start_time).total_seconds() < epoch_duration:
         action = agent.choose_action(observation, iteration * (epoch + 1), verbose=True)
-        if iteration < 10:
+        if iteration < 100:
             action = 2
 
         keyboard_input(action)
