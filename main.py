@@ -17,8 +17,8 @@ from BoshyEnv import BoshyEnv
 
 MAX_X = 4000
 MAX_Y = 500
-X_GRID_SIZE = 1000
-Y_GRID_SIZE = 125
+X_GRID_SIZE = 80
+Y_GRID_SIZE = 10
 torch.set_printoptions(precision=2)
 
 def setup_graph():
@@ -57,22 +57,23 @@ def play(agent, action_delay, epoch=0):
     done = False
 
     observation = env.reset()
-    reward = 0
     start_time = datetime.now()
     while not done and (datetime.now() - start_time).total_seconds() < epoch_duration:
         action = agent.choose_action(observation, iteration * (epoch + 1), verbose=True)
-        if iteration < 10:
+        if iteration < 40:
             action = 1
 
         keyboard_input(action)
 
-        start_learning = datetime.now()
-        while (datetime.now() - start_learning).total_seconds() < action_delay:
-            agent.learn()
-            observation_, reward, done, info, _ = env.step(action, verbose=False)
-            max_x = np.max([observation_[0], max_x])
-            agent.store_transition(observation, action, reward, observation_, done)
-            observation = observation_
+        sleep(action_delay)
+        agent.learn()
+        # start_learning = datetime.now()
+        # while (datetime.now() - start_learning).total_seconds() < action_delay:
+        #     agent.learn()
+        observation_, reward, done, info, _ = env.step(action, verbose=False)
+        max_x = np.max([observation_[0], max_x])
+        agent.store_transition(observation, action, reward, observation_, done)
+        observation = observation_
 
         if iteration % 240 == 0 and True:
             print("Duration: ", datetime.now() - start_time)
@@ -100,18 +101,16 @@ if __name__ == "__main__":
         epoch_duration = 36000
         losses, x, times_to_goal = [], [], []
         action_delay = 0.075
-        action_delay_multiplier = 1
         batch_size = 64
-        initial_batch_size = 64
         mem_size = 100000
-        lr = 0.003
-        exploration_factor = 3.16
+        lr = 1e-5
+        exploration_factor = 0.1
         ef_multiplier = 5
         observation = env.reset()
-        agent = BoshyAgent(gamma=0.9, initial_batch_size=initial_batch_size, batch_size=batch_size, n_actions=5,
+        agent = BoshyAgent(gamma=0.9, batch_size=batch_size, n_actions=5,
                            input_dims=len(observation), lr=lr, graph=graph, x_grid=X_GRID_SIZE, y_grid=Y_GRID_SIZE,
                            max_mem_size=mem_size, exploration_factor=exploration_factor)
-        best_weights = agent.Q_eval.state_dict()
+        best_weights = agent.main_network.state_dict()
         for epoch in range(epochs):
             max_x = 0
             time_to_goal = timedelta.max
@@ -128,7 +127,7 @@ if __name__ == "__main__":
                 current_loss = agent.min_loss.cpu().detach().numpy().item()
                 losses.append(current_loss)
                 if current_loss < np.min(losses):
-                    best_weights = agent.Q_eval.state_dict()
+                    best_weights = agent.main_network.state_dict()
                 x.append(max_x)
                 times_to_goal.append(time_to_goal)
                 if keyboard.is_pressed("q"):

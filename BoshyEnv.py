@@ -36,7 +36,7 @@ class BoshyEnv(Env):
             sleep(1)
         keyboard.release("right")
         self.read_process()
-        return np.array((self.x, self.y, 0, 0, 0, 0))
+        return np.array((self.x, self.y, 0, 0, 0, 0, 0, 0))
 
     def get_state(self):
         return np.array((self.x, self.y, 0, 0, self.j_streak / 10, self.l_streak / 100, self.r_streak / 100,
@@ -94,6 +94,20 @@ class BoshyEnv(Env):
 
     # Epoch is a parameter for tuning environment variables to different values on different epochs
     def step(self, action, verbose=False, epoch=0):
+        if self.j_streak != 0:
+            self.j_streak += 1
+            if action == 4:
+                self.j_streak = 0
+        elif action == 3:
+            self.j_streak = 1
+        if action == 0:
+            self.r_streak += 1
+        else:
+            self.r_streak = 0
+        if action == 1:
+            self.l_streak += 1
+        else:
+            self.l_streak = 0
         old_x = self.x
         old_y = self.y
         self.read_process()
@@ -105,27 +119,23 @@ class BoshyEnv(Env):
         done = (self.y == 0 or self.y == 8)
         delta_x = self.x - old_x
         delta_y = self.y - old_y
+        self.steps += 1
         reward = 0
         reward -= 10 * (action == 2)
-        reward += action == 1
         reward += np.random.normal(scale=0.1)
-        a = 0.365
-        b = 0.43
-        if self.x < b:
-            curve_distance = np.abs(10 * (a - b) * self.y - a + 9 * b - 8 * self.x) \
-                             / np.sqrt(25 * (a-b)**2 + 16)
-            curve_end_distance = np.sqrt((self.x - b)**2 + (self.y - 0.1)**2)
-            reward -= curve_distance
-            reward -= curve_end_distance
-        if self.steps % 200 == 0:
-            print("Reward at step", self.steps, ":", reward)
+        subgoal = (0.43, 0.1)
+        subgoal_distance = np.sqrt(((self.x - subgoal[0]) * self.max_x / (self.max_x + self.max_y))**2 +
+                                   ((self.y - subgoal[1]) * self.max_y / (self.max_x + self.max_y))**2)
+        reward += 3 - subgoal_distance * 10
         reward = max(min(reward, 100), -100)
-        self.steps += 1
         if verbose:
             print("X, Delta X, Delta Y, Reward")
             print(self.x, delta_x, delta_y, reward)
             print("===============")
-        observation = np.array((self.x, self.y, delta_x * 10, delta_y * 10, self.steps / 100, action / 15))
+        if self.steps % 200 == 0:
+            print("Reward at step", self.steps, ":", reward)
+        observation = np.array((self.x, self.y, delta_x * 10, delta_y * 10, np.log(self.j_streak + 1) * 5,
+                                np.log(self.r_streak + 1) * 5, np.log(self.l_streak + 1) * 5, np.log(self.steps)))
         return observation, reward, done, False, {}
 
     def render(self):
