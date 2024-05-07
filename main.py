@@ -32,22 +32,22 @@ def setup_graph():
     win.activate()
 
 def keyboard_input(action):
-    if action & 1:
+    if action == 0:
         keyboard.press("left")
     else:
         keyboard.release("left")
-    if action & 2:
+    if action == 1:
         keyboard.press("right")
     else:
         keyboard.release("right")
-    if action & 4:
-        keyboard.press("z")
-    else:
-        keyboard.release("z")
-    if action & 8:
+    if action == 2:
         keyboard.press("x")
         sleep(0.01)
         keyboard.release("x")
+    if action == 3:
+        keyboard.press("z")
+    if action == 4:
+        keyboard.release("z")
 
 def play(agent, action_delay, epoch=0):
     agent.min_loss = tensor(torch.inf)
@@ -57,24 +57,22 @@ def play(agent, action_delay, epoch=0):
     done = False
 
     observation = env.reset()
+    reward = 0
     start_time = datetime.now()
     while not done and (datetime.now() - start_time).total_seconds() < epoch_duration:
         action = agent.choose_action(observation, iteration * (epoch + 1), verbose=True)
-        if iteration < 100:
-            action = 2
+        if iteration < 10:
+            action = 1
 
         keyboard_input(action)
 
         start_learning = datetime.now()
         while (datetime.now() - start_learning).total_seconds() < action_delay:
             agent.learn()
-
-        observation_, reward, done, info, _ = env.step(action, verbose=False)
-        max_x = np.max([observation_[0], max_x])
-        if observation_[1] < 0.7 and time_to_goal == timedelta.max and iteration > batch_size:
-            time_to_goal = datetime.now() - start_time
-
-        agent.store_transition(observation, action, reward, observation_, done)
+            observation_, reward, done, info, _ = env.step(action, verbose=False)
+            max_x = np.max([observation_[0], max_x])
+            agent.store_transition(observation, action, reward, observation_, done)
+            observation = observation_
 
         if iteration % 240 == 0 and True:
             print("Duration: ", datetime.now() - start_time)
@@ -85,7 +83,6 @@ def play(agent, action_delay, epoch=0):
         if iteration % 10 == 0:
             env.read_process()
 
-        observation = observation_
         iteration += 1
 
         if keyboard.is_pressed("q"):
@@ -99,8 +96,8 @@ if __name__ == "__main__":
         graph = False
         if graph:
             setup_graph()
-        epochs = 10
-        epoch_duration = 60
+        epochs = 1
+        epoch_duration = 36000
         losses, x, times_to_goal = [], [], []
         action_delay = 0.075
         action_delay_multiplier = 1
@@ -110,8 +107,8 @@ if __name__ == "__main__":
         lr = 0.003
         exploration_factor = 3.16
         ef_multiplier = 5
-        observation = env.get_state()
-        agent = BoshyAgent(gamma=0.9, initial_batch_size=initial_batch_size, batch_size=batch_size, n_actions=16,
+        observation = env.reset()
+        agent = BoshyAgent(gamma=0.9, initial_batch_size=initial_batch_size, batch_size=batch_size, n_actions=5,
                            input_dims=len(observation), lr=lr, graph=graph, x_grid=X_GRID_SIZE, y_grid=Y_GRID_SIZE,
                            max_mem_size=mem_size, exploration_factor=exploration_factor)
         best_weights = agent.Q_eval.state_dict()
@@ -137,10 +134,6 @@ if __name__ == "__main__":
                 if keyboard.is_pressed("q"):
                     print("Ok, you can quit")
                     break
-        # print("Running with best weights...")
-        # if not keyboard.is_pressed('w'):
-        #     agent.Q_eval.load_state_dict(best_weights)
-        #     agent.play()
         if graph:
             plt.ioff()
             plt.gca().clear()

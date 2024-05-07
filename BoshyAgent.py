@@ -18,6 +18,7 @@ class BoshyAgent:
         self.y_grid = y_grid
         self.exploration = 0
         self.exploitation = 0
+        self.n_actions = n_actions
 
         self.batch_size = batch_size
         self.initial_batch_size = initial_batch_size
@@ -47,7 +48,7 @@ class BoshyAgent:
 
     def choose_action(self, observation, iteration, verbose=False):
         if iteration < self.initial_batch_size:
-            return random.randint(0, 15)
+            return random.randint(0, self.n_actions)
         state = tensor(observation, dtype=torch.float32).to(self.Q_eval.device)
         downsampled_state = np.array((int(observation[0] * self.x_grid),
                                       int(observation[1] * self.y_grid)), dtype=int)
@@ -93,20 +94,6 @@ class BoshyAgent:
         q_next = self.Q_eval.forward(new_state_batch)
         q_next[terminal_batch] = 0.0
         q_target = reward_batch + self.gamma * torch.max(q_next, dim=1)[0]
-
-        # # Calculate mean and standard deviation of Q-values
-        # q_mean = q_eval.mean()
-        # q_std = q_eval.std()
-        # t_mean = q_target.mean()
-        # t_std = q_target.std()
-        #
-        # # Identify outliers (samples more than 3 standard deviations away from the mean)
-        # eval_outliers_mask = torch.abs(q_eval - q_mean) > 3 * q_std
-        # target_outliers_mask = torch.abs(q_target - t_mean) > 3 * t_std
-        # outlier_mask = eval_outliers_mask | target_outliers_mask
-        #
-        # q_target[outlier_mask] = 0.0
-        # q_eval[outlier_mask] = 0.0
 
         loss = torch.sqrt(self.Q_eval.loss(q_target, q_eval).to(self.Q_eval.device))
         if loss < self.min_loss:

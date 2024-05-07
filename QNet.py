@@ -2,7 +2,7 @@ import torch
 from torch import nn, optim
 
 class QNet(nn.Module):
-    def __init__(self, lr=0.03, input_dims=9, n_actions=16):
+    def __init__(self, lr=0.03, input_dims=6, n_actions=5):
         super(QNet, self).__init__()
         self.input_dims = input_dims
         self.final_layer = nn.Linear(128, n_actions)

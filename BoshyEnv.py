@@ -36,7 +36,7 @@ class BoshyEnv(Env):
             sleep(1)
         keyboard.release("right")
         self.read_process()
-        return np.array((self.x, self.y, 0, 0, 0, 0, 0, 0, 0))
+        return np.array((self.x, self.y, 0, 0, 0, 0))
 
     def get_state(self):
         return np.array((self.x, self.y, 0, 0, self.j_streak / 10, self.l_streak / 100, self.r_streak / 100,
@@ -94,12 +94,6 @@ class BoshyEnv(Env):
 
     # Epoch is a parameter for tuning environment variables to different values on different epochs
     def step(self, action, verbose=False, epoch=0):
-        self.j_streak += 1
-        self.j_streak *= action >> 2 & 1
-        self.r_streak += 1
-        self.r_streak *= action >> 1 & 1 and not action & 1
-        self.l_streak += 1
-        self.l_streak *= action & 1 and not action & 2
         old_x = self.x
         old_y = self.y
         self.read_process()
@@ -112,19 +106,15 @@ class BoshyEnv(Env):
         delta_x = self.x - old_x
         delta_y = self.y - old_y
         reward = 0
-        reward -= 10 * (action >> 3 & 1)
-        reward -= 100 * ((action & 3) == 3)
-        reward += (action >> 1 & 1)
+        reward -= 10 * (action == 2)
+        reward += action == 1
         reward += np.random.normal(scale=0.1)
-        if self.l_streak <= 25 and self.r_streak <= 25:
-            reward -= 0.5
         a = 0.365
         b = 0.43
         if self.x < b:
             curve_distance = np.abs(10 * (a - b) * self.y - a + 9 * b - 8 * self.x) \
                              / np.sqrt(25 * (a-b)**2 + 16)
             curve_end_distance = np.sqrt((self.x - b)**2 + (self.y - 0.1)**2)
-            curve_distance_penalty = curve_distance
             reward -= curve_distance
             reward -= curve_end_distance
         if self.steps % 200 == 0:
@@ -135,8 +125,7 @@ class BoshyEnv(Env):
             print("X, Delta X, Delta Y, Reward")
             print(self.x, delta_x, delta_y, reward)
             print("===============")
-        observation = np.array((self.x, self.y, delta_x * 10, delta_y * 10, self.j_streak / 10, self.l_streak / 10,
-                                self.r_streak / 10, self.steps / 100, action / 15))
+        observation = np.array((self.x, self.y, delta_x * 10, delta_y * 10, self.steps / 100, action / 15))
         return observation, reward, done, False, {}
 
     def render(self):
