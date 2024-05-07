@@ -84,7 +84,7 @@ class BoshyAgent:
         action_batch = self.action_memory[batch]
 
         q_eval = self.main_network.forward(state_batch)[batch_index, action_batch]
-        q_next = self.main_network.forward(new_state_batch)
+        q_next = self.target_network.forward(new_state_batch)
         q_next[terminal_batch] = 0.0
         q_target = reward_batch + self.gamma * torch.max(q_next, dim=1)[0]
 
@@ -100,13 +100,16 @@ class BoshyAgent:
         if self.graph:
             self.graph_net(64 ** 2 * self.main_network.input_dims)
 
+    def update_target_network(self):
+        self.target_network.load_state_dict(self.main_network.state_dict())
+
     def graph_net(self, weights_lcm):
         device = self.main_network.device
         plt.gcf().clear()
         weight_data = tensor([]).to(device)
         bias_data = tensor([]).to(device)
-        for layer in [self.main_network.fc1, self.main_network.fc2, self.main_network.fc3, self.main_network.fc4, self.main_network.fc5,
-                      self.main_network.fc6, self.main_network.fc7]:
+        for layer in [self.main_network.fc1, self.main_network.fc2, self.main_network.fc3, self.main_network.fc4,
+                      self.main_network.fc5, self.main_network.fc6, self.main_network.fc7]:
             w = layer.weight.clone().detach()
             b = layer.bias.clone().detach()
             weights = tensor([]).to(device)

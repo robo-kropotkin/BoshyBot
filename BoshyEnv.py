@@ -126,16 +126,16 @@ class BoshyEnv(Env):
         subgoal = (0.43, 0.1)
         subgoal_distance = np.sqrt(((self.x - subgoal[0]) * self.max_x / (self.max_x + self.max_y))**2 +
                                    ((self.y - subgoal[1]) * self.max_y / (self.max_x + self.max_y))**2)
-        reward += 3 - subgoal_distance * 10
+        reward += subgoal_distance
         reward = max(min(reward, 100), -100)
         if verbose:
             print("X, Delta X, Delta Y, Reward")
             print(self.x, delta_x, delta_y, reward)
             print("===============")
-        if self.steps % 200 == 0:
+        if self.steps % 30 == 0:
             print("Reward at step", self.steps, ":", reward)
-        observation = np.array((self.x, self.y, delta_x * 10, delta_y * 10, np.log(self.j_streak + 1) * 5,
-                                np.log(self.r_streak + 1) * 5, np.log(self.l_streak + 1) * 5, np.log(self.steps)))
+        observation = np.array((self.x, self.y, delta_x * 10, delta_y * 10, self.j_streak,
+                                self.r_streak, self.l_streak, np.log(self.steps)))
         return observation, reward, done, False, {}
 
     def render(self):

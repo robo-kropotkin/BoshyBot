@@ -97,17 +97,17 @@ if __name__ == "__main__":
         graph = False
         if graph:
             setup_graph()
-        epochs = 1
-        epoch_duration = 36000
+        epochs = 100
+        epoch_duration = 100
         losses, x, times_to_goal = [], [], []
         action_delay = 0.075
         batch_size = 64
         mem_size = 100000
-        lr = 1e-5
-        exploration_factor = 0.1
-        ef_multiplier = 5
+        lr = 0.03
+        exploration_factor = 10
+        discount_factor = 0.99
         observation = env.reset()
-        agent = BoshyAgent(gamma=0.9, batch_size=batch_size, n_actions=5,
+        agent = BoshyAgent(gamma=0.99, batch_size=batch_size, n_actions=5,
                            input_dims=len(observation), lr=lr, graph=graph, x_grid=X_GRID_SIZE, y_grid=Y_GRID_SIZE,
                            max_mem_size=mem_size, exploration_factor=exploration_factor)
         best_weights = agent.main_network.state_dict()
@@ -118,6 +118,7 @@ if __name__ == "__main__":
                 print("Begin epoch:", epoch + 1)
                 current_loss, max_x, time_to_goal = play(agent, action_delay, epoch)
                 agent.learn(verbose=True)
+                agent.update_target_network()
                 print("End epoch:", epoch + 1)
 
             except (ReadWriteMemoryError, KeyboardInterrupt):
