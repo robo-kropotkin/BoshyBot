@@ -7,37 +7,36 @@ from torch import tensor
 from QNet import QNet
 
 class BoshyAgent:
-    def __init__(self, gamma, lr, input_dims, batch_size, n_actions, max_mem_size=100000,
-                 graph=False, exploration_factor=0.3, x_grid=1000, y_grid=50):
+    def __init__(self, gamma, lr, batch_size, n_actions, max_mem_size=100000, horizon=40,
+                 graph=False, exploration_factor=0.3, x_grid=1000, y_grid=50, input_dims=9):
         self.gamma = gamma
         self.lr = lr
-        self.exploration_factor = exploration_factor
-        self.graph = graph
+        self.batch_size = batch_size
+        self.n_actions = n_actions
         self.mem_size = max_mem_size
+        self.horizon = horizon
+        self.graph = graph
+        self.exploration_factor = exploration_factor
         self.x_grid = x_grid
         self.y_grid = y_grid
+
         self.exploration = 0
         self.exploitation = 0
-        self.n_actions = n_actions
-
-        self.batch_size = batch_size
         self.mem_cntr = 0
         self.min_loss = tensor(torch.inf)
 
         self.main_network = QNet(self.lr, n_actions=n_actions, input_dims=input_dims)
         self.target_network = QNet(self.lr, n_actions=n_actions, input_dims=input_dims)
         self.state_memory = np.zeros((self.mem_size, input_dims), dtype=np.float32)
-        self.downsampled_state_memory = np.zeros((self.mem_size, 5))
-        self.new_state_memory = np.zeros((self.mem_size, input_dims), dtype=np.float32)
+        self.downsampled_state_memory = np.zeros((self.mem_size, 2))
         self.action_memory = np.zeros(self.mem_size, dtype=np.int32)
         self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
         self.terminal_memory = np.zeros(self.mem_size, bool)
 
     def store_transition(self, state, action, reward, state_, done):
-        index = self.mem_cntr % self.mem_size
+        index = self.mem_cntr % (self.mem_size - 1)
         self.state_memory[index] = state
         self.downsampled_state_memory[index] = self.downsample(state)
-        self.new_state_memory[index] = state_
         self.reward_memory[index] = reward
         self.action_memory[index] = action
         self.terminal_memory[index] = done
@@ -70,23 +69,27 @@ class BoshyAgent:
             print("Action: ", action, "Max Q:", torch.argmax(actions).item())
         return action
 
-    def learn(self, verbose=False):
-        if self.mem_cntr < self.batch_size:
+    def learn_monte_carlo(self, verbose=False):
+        if self.mem_cntr < self.batch_size + self.horizon:
             return
         self.main_network.optimizer.zero_grad()
-        max_mem = min(self.mem_cntr, self.mem_size)
+        max_mem = min(self.mem_cntr - self.horizon, self.mem_size)
         batch = np.random.choice(max_mem, self.batch_size, replace=False)
         batch_index = np.arange(self.batch_size, dtype=np.int32)
+        horizon_indices = np.expand_dims(np.arange(self.horizon), axis=0).repeat(self.batch_size, axis=0)
+        new_indices = np.expand_dims(batch, axis=0).repeat(self.horizon, axis=0).transpose() + horizon_indices
         state_batch = tensor(self.state_memory[batch]).to(self.main_network.device)
-        new_state_batch = tensor(self.new_state_memory[batch]).to(self.main_network.device)
-        reward_batch = tensor(self.reward_memory[batch]).to(self.main_network.device)
-        terminal_batch = tensor(self.terminal_memory[batch]).to(self.main_network.device)
+        # new_state_batch = tensor(self.state_memory[new_indices]).to(self.main_network.device)
+        reward_batch = tensor(self.reward_memory[new_indices]).to(self.main_network.device)
+        # terminal_batch = tensor(self.terminal_memory[new_indices]).to(self.main_network.device)
         action_batch = self.action_memory[batch]
 
         q_eval = self.main_network.forward(state_batch)[batch_index, action_batch]
-        q_next = self.target_network.forward(new_state_batch)
-        q_next[terminal_batch] = 0.0
-        q_target = reward_batch + self.gamma * torch.max(q_next, dim=1)[0]
+        # q_next = self.target_network.forward(new_state_batch)
+        # q_next[terminal_batch] = 0.0
+        discounts = tensor(np.expand_dims(np.geomspace(1, self.gamma**(self.horizon - 1), num=self.horizon), axis=0)
+                           .repeat(self.batch_size, axis=0), dtype=torch.float32).to(self.main_network.device)
+        q_target = (reward_batch * discounts).sum(dim=1)
 
         loss = torch.sqrt(self.main_network.loss(q_target, q_eval).to(self.main_network.device))
         if loss < self.min_loss:
@@ -101,7 +104,10 @@ class BoshyAgent:
             self.graph_net(64 ** 2 * self.main_network.input_dims)
 
     def update_target_network(self):
-        self.target_network.load_state_dict(self.main_network.state_dict())
+        with torch.no_grad():
+            for target_param, main_param in zip(self.target_network.parameters(), self.main_network.parameters()):
+                target_param.data *= 0.9
+                target_param.data += 0.1 * main_param
 
     def graph_net(self, weights_lcm):
         device = self.main_network.device
@@ -132,8 +138,5 @@ class BoshyAgent:
     def downsample(self, state):
         return np.array((
             int(state[0] * self.x_grid),
-            int(state[1] * self.y_grid),
-            int(state[4]),
-            int(state[5]),
-            int(state[6])
+            int(state[1] * self.y_grid)
         ), dtype=int)

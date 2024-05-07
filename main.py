@@ -60,13 +60,11 @@ def play(agent, action_delay, epoch=0):
     start_time = datetime.now()
     while not done and (datetime.now() - start_time).total_seconds() < epoch_duration:
         action = agent.choose_action(observation, iteration * (epoch + 1), verbose=True)
-        if iteration < 40:
-            action = 1
 
         keyboard_input(action)
 
         sleep(action_delay)
-        agent.learn()
+        agent.learn_monte_carlo()
         # start_learning = datetime.now()
         # while (datetime.now() - start_learning).total_seconds() < action_delay:
         #     agent.learn()
@@ -77,7 +75,7 @@ def play(agent, action_delay, epoch=0):
 
         if iteration % 240 == 0 and True:
             print("Duration: ", datetime.now() - start_time)
-            agent.learn(verbose=True)
+            agent.learn_monte_carlo(verbose=True)
             print("Reward: ", reward)
             print("===============")
 
@@ -97,7 +95,7 @@ if __name__ == "__main__":
         graph = False
         if graph:
             setup_graph()
-        epochs = 100
+        epochs = 200
         epoch_duration = 100
         losses, x, times_to_goal = [], [], []
         action_delay = 0.075
@@ -106,8 +104,9 @@ if __name__ == "__main__":
         lr = 0.03
         exploration_factor = 10
         discount_factor = 0.99
+        horizon = 40
         observation = env.reset()
-        agent = BoshyAgent(gamma=0.99, batch_size=batch_size, n_actions=5,
+        agent = BoshyAgent(gamma=0.99, batch_size=batch_size, n_actions=5, horizon=horizon,
                            input_dims=len(observation), lr=lr, graph=graph, x_grid=X_GRID_SIZE, y_grid=Y_GRID_SIZE,
                            max_mem_size=mem_size, exploration_factor=exploration_factor)
         best_weights = agent.main_network.state_dict()
@@ -117,7 +116,7 @@ if __name__ == "__main__":
             try:
                 print("Begin epoch:", epoch + 1)
                 current_loss, max_x, time_to_goal = play(agent, action_delay, epoch)
-                agent.learn(verbose=True)
+                agent.learn_monte_carlo(verbose=True)
                 agent.update_target_network()
                 print("End epoch:", epoch + 1)
 
