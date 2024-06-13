@@ -7,17 +7,32 @@ from time import sleep
 from ReadWriteMemory import ReadWriteMemory
 from gymnasium import Env
 
+
 class BoshyEnv(Env):
-    def __init__(self, max_x=4000, max_y=500):
+    def __init__(self, level=0):
         self.rwm = ReadWriteMemory()
         self.process = None
         self.process_handle = None
         self.im_address = self.x_pointer = self.y_pointer = self.j_streak = self.r_streak = self.l_streak = 0
         self.steps = 0
         self.x = self.y = 0.0
-        self.max_x = max_x
-        self.max_y = max_y
+        self.player_max_x = 0
+        if level == 0:
+            self.level_width = 4000
+            self.level_height = 500
         self.exploration_bonus = np.array([])
+
+    @property
+    def observation_space(self):
+        return 9
+
+    @property
+    def max_x(self):
+        return self.player_max_x
+
+    @max_x.setter
+    def max_x(self, value):
+        self.player_max_x = value
 
     def reset(self, seed=None, options=None):
         keyboard.release("z")
@@ -43,7 +58,7 @@ class BoshyEnv(Env):
                          self.steps / 100, 0))
 
     def run(self):
-        self.process_handle = subprocess.Popen(path.join(getcwd(), r"..\IWBTB\I Wanna Be The Boshy.exe"))
+        self.process_handle = subprocess.Popen(path.join(getcwd(), r".\IWBTB\I Wanna Be The Boshy.exe"))
         sleep(5)
         win = gw.getWindowsWithTitle("I Wanna Be The Boshy")[0]
         win.move(1000, 0)
@@ -62,8 +77,8 @@ class BoshyEnv(Env):
         y_offsets = [0x3FC, 0x28, 0, 0x7E8, 0x8D0, 0x80, 0x54]
         self.x_pointer = self.process.get_pointer(self.im_address + 0x00059A98, x_offsets)
         self.y_pointer = self.process.get_pointer(self.im_address + 0x00059A1C, y_offsets)
-        self.x = self.process.read(self.x_pointer) / self.max_x
-        self.y = self.process.read(self.y_pointer) / self.max_y
+        self.x = self.process.read(self.x_pointer) / self.level_width
+        self.y = self.process.read(self.y_pointer) / self.level_height
         self.process.close()
 
     @staticmethod
@@ -113,7 +128,7 @@ class BoshyEnv(Env):
         self.read_process()
         for i in range(100):
             self.read_process()
-            if np.abs(self.x + self.y) < self.max_x + self.max_y and self.y != 0 and self.y != 8:
+            if np.abs(self.x + self.y) < self.level_width + self.level_height and self.y != 0 and self.y != 8:
                 break
 
         done = (self.y == 0 or self.y == 8)
@@ -124,8 +139,7 @@ class BoshyEnv(Env):
         reward -= 10 * (action == 2)
         reward += np.random.normal(scale=0.1)
         subgoal = (0.43, 0.1)
-        subgoal_distance = np.sqrt(((self.x - subgoal[0]) * self.max_x / (self.max_x + self.max_y))**2 +
-                                   ((self.y - subgoal[1]) * self.max_y / (self.max_x + self.max_y))**2)
+        subgoal_distance = np.sqrt((self.x - subgoal[0]) ** 2 + (self.y - subgoal[1]) ** 2)
         reward += subgoal_distance
         reward = max(min(reward, 100), -100)
         if verbose:

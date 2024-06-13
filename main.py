@@ -15,11 +15,8 @@ import torch
 from BoshyAgent import BoshyAgent
 from BoshyEnv import BoshyEnv
 
-MAX_X = 4000
-MAX_Y = 500
-X_GRID_SIZE = 80
-Y_GRID_SIZE = 10
 torch.set_printoptions(precision=2)
+
 
 def setup_graph():
     plt.ion()
@@ -30,6 +27,7 @@ def setup_graph():
     plt.pause(0.001)
     win = gw.getWindowsWithTitle("I Wanna Be The Boshy")[0]
     win.activate()
+
 
 def keyboard_input(action):
     if action == 0:
@@ -49,99 +47,72 @@ def keyboard_input(action):
     if action == 4:
         keyboard.release("z")
 
-def play(agent, action_delay, epoch=0):
-    agent.min_loss = tensor(torch.inf)
-    max_x = 0
-    time_to_goal = timedelta.max
-    iteration = 1
-    done = False
 
-    observation = env.reset()
-    start_time = datetime.now()
-    while not done and (datetime.now() - start_time).total_seconds() < epoch_duration:
-        action = agent.choose_action(observation, iteration * (epoch + 1), verbose=True)
+class BoshyController:
+    def __init__(self, settings=None):
+        self.epochs = settings.epochs if hasattr(settings, "epochs") else 10
+        self.epoch_duration = settings.epoch_duration if hasattr(settings, "epoch_duration") else 300
+        self.action_delay = settings.action_delay if hasattr(settings, "action_delay") else 0.075
+        agent_settings = {
+            "gamma": settings.gamma if hasattr(settings, "gamma") else 0.99,
+            "lr": settings.lr if hasattr(settings, "lr") else 0.03,
+            "batch_size": settings.batch_size if hasattr(settings, "batch_size") else 64,
+            "n_actions": 5,
+            "input_dims": 8,
+            "mem_size": settings.mem_size if hasattr(settings, "mem_size") else 100000,
+            "horizon": settings.horizon if hasattr(settings, "horizon") else 40,
+            "graph": settings.graph if hasattr(settings, "graph") else False,
+            "exploration_factor": settings.exploration_factor if hasattr(settings, "exploration_factor") else 0.3,
+            "x_grid": settings.x_grid if hasattr(settings, "x_grid") else 20,
+            "y_grid": settings.y_grid if hasattr(settings, "y_grid") else 20,
+        }
+        self.agent = BoshyAgent(agent_settings)
+        self.env = BoshyEnv()
 
-        keyboard_input(action)
-
-        sleep(action_delay)
-        agent.learn_monte_carlo()
-        # start_learning = datetime.now()
-        # while (datetime.now() - start_learning).total_seconds() < action_delay:
-        #     agent.learn()
-        observation_, reward, done, info, _ = env.step(action, verbose=False)
-        max_x = np.max([observation_[0], max_x])
-        agent.store_transition(observation, action, reward, observation_, done)
-        observation = observation_
-
-        if iteration % 240 == 0 and True:
-            print("Duration: ", datetime.now() - start_time)
-            agent.learn_monte_carlo(verbose=True)
-            print("Reward: ", reward)
-            print("===============")
-
-        if iteration % 10 == 0:
-            env.read_process()
-
-        iteration += 1
-
-        if keyboard.is_pressed("q"):
-            break
-    return agent.min_loss, max_x, time_to_goal
-
-if __name__ == "__main__":
-    env = BoshyEnv(max_x=MAX_X, max_y=MAX_Y)
-    env.run()
-    try:
-        graph = False
-        if graph:
-            setup_graph()
-        epochs = 200
-        epoch_duration = 100
-        losses, x, times_to_goal = [], [], []
-        action_delay = 0.075
-        batch_size = 64
-        mem_size = 100000
-        lr = 0.03
-        exploration_factor = 10
-        discount_factor = 0.99
-        horizon = 40
-        observation = env.reset()
-        agent = BoshyAgent(gamma=0.99, batch_size=batch_size, n_actions=5, horizon=horizon,
-                           input_dims=len(observation), lr=lr, graph=graph, x_grid=X_GRID_SIZE, y_grid=Y_GRID_SIZE,
-                           max_mem_size=mem_size, exploration_factor=exploration_factor)
-        best_weights = agent.main_network.state_dict()
-        for epoch in range(epochs):
-            max_x = 0
-            time_to_goal = timedelta.max
-            try:
-                print("Begin epoch:", epoch + 1)
-                current_loss, max_x, time_to_goal = play(agent, action_delay, epoch)
-                agent.learn_monte_carlo(verbose=True)
-                agent.update_target_network()
-                print("End epoch:", epoch + 1)
-
-            except (ReadWriteMemoryError, KeyboardInterrupt):
-                print("Interrupted. How wude.")
+    def play(self):
+        self.env.run()
+        losses, goal_distances = [], []
+        for epoch in range(self.epochs):
+            self.run_epoch()
+            if keyboard.is_pressed("q"):
                 break
-            finally:
-                current_loss = agent.min_loss.cpu().detach().numpy().item()
-                losses.append(current_loss)
-                if current_loss < np.min(losses):
-                    best_weights = agent.main_network.state_dict()
-                x.append(max_x)
-                times_to_goal.append(time_to_goal)
-                if keyboard.is_pressed("q"):
-                    print("Ok, you can quit")
-                    break
-        if graph:
-            plt.ioff()
-            plt.gca().clear()
-            plt.close()
+
+        self.env.close()
         print("Final Scores:")
         for i in range(len(losses)):
-            print("Lowest loss for epoch", i, " is:", losses[i], "Max X is:", x[i],
-                  "Time to subgoal is:", times_to_goal[i])
-    except RuntimeError as e:
-        raise e
-    finally:
-        env.close()
+            print("Lowest loss for epoch", i, " is:", losses[i])
+            print("Minimal distance to goal for epoch", i, " is:", goal_distances[i])
+
+    def run_epoch(self):
+        self.agent.min_loss = tensor(torch.inf)
+        self.env.max_x = 0
+        iteration = 1
+        done = False
+
+        observation = self.env.reset()
+        start_time = datetime.now()
+        while not done and (datetime.now() - start_time).total_seconds() < self.epoch_duration:
+            observation, done = self.step(observation)
+            if keyboard.is_pressed("q"):
+                break
+
+            if iteration % 10 == 0:
+                self.env.read_process()
+
+            iteration += 1
+
+    def step(self, state):
+        action = self.agent.choose_action(state, verbose=True)
+        keyboard_input(action)
+
+        start_learning = datetime.now()
+        while (datetime.now() - start_learning).total_seconds() < self.action_delay:
+            self.agent.learn_monte_carlo()
+        next_state, reward, done, info, _ = self.env.step(action, verbose=False)
+        self.agent.store_transition(state, action, reward, done)
+        return next_state, done
+
+
+if __name__ == "__main__":
+    controller = BoshyController()
+    controller.play()

@@ -1,6 +1,7 @@
 import torch
 from torch import nn, optim
 
+
 class QNet(nn.Module):
     def __init__(self, lr=0.03, input_dims=6, n_actions=5):
         super(QNet, self).__init__()

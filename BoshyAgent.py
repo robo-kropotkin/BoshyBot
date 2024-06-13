@@ -1,29 +1,35 @@
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from numpy import random
 from torch import tensor
 
 from QNet import QNet
 
+
 class BoshyAgent:
-    def __init__(self, gamma, lr, batch_size, n_actions, max_mem_size=100000, horizon=40,
-                 graph=False, exploration_factor=0.3, x_grid=1000, y_grid=50, input_dims=9):
-        self.gamma = gamma
-        self.lr = lr
-        self.batch_size = batch_size
-        self.n_actions = n_actions
-        self.mem_size = max_mem_size
-        self.horizon = horizon
-        self.graph = graph
-        self.exploration_factor = exploration_factor
-        self.x_grid = x_grid
-        self.y_grid = y_grid
+    def __init__(self, settings):
+        required_settings = ["gamma", "lr", "batch_size", "n_actions", "mem_size", "horizon", "input_dims",
+                             "graph", "x_grid", "y_grid"]
+        for setting in required_settings:
+            if setting not in settings:
+                raise ValueError(f"Missing setting: {setting}")
+        self.gamma = settings['gamma']
+        self.lr = settings["lr"]
+        self.batch_size = settings["batch_size"]
+        self.mem_size = settings["mem_size"]
+        self.horizon = settings["horizon"]
+        self.graph = settings["graph"]
+        self.exploration_factor = settings["exploration_factor"]
+        self.x_grid = settings["x_grid"]
+        self.y_grid = settings["y_grid"]
+        input_dims = settings["input_dims"]
+        n_actions = settings["n_actions"]
 
         self.exploration = 0
         self.exploitation = 0
+        self.iteration = 0
         self.mem_cntr = 0
-        self.min_loss = tensor(torch.inf)
+        self._min_loss = tensor(torch.inf)
 
         self.main_network = QNet(self.lr, n_actions=n_actions, input_dims=input_dims)
         self.target_network = QNet(self.lr, n_actions=n_actions, input_dims=input_dims)
@@ -33,7 +39,15 @@ class BoshyAgent:
         self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
         self.terminal_memory = np.zeros(self.mem_size, bool)
 
-    def store_transition(self, state, action, reward, state_, done):
+    @property
+    def min_loss(self):
+        return self._min_loss
+
+    @min_loss.setter
+    def min_loss(self, value):
+        self._min_loss = value
+
+    def store_transition(self, state, action, reward, done):
         index = self.mem_cntr % (self.mem_size - 1)
         self.state_memory[index] = state
         self.downsampled_state_memory[index] = self.downsample(state)
@@ -44,23 +58,25 @@ class BoshyAgent:
         if self.mem_cntr % 300 == 0:
             print(self.mem_cntr)
 
-    def choose_action(self, observation, iteration, verbose=False):
+    def choose_action(self, observation, verbose=False):
         state = tensor(observation, dtype=torch.float32).to(self.main_network.device)
         downsampled_state = self.downsample(observation)
         actions = self.main_network.forward(state)
         clipped_cntr = np.min((self.mem_cntr + 1, self.mem_size))
         state_memory = np.all(self.downsampled_state_memory == downsampled_state, axis=1).astype(int)[:clipped_cntr]
-        action_mem = tensor(self.action_memory[np.where(state_memory)], dtype=torch.float32).to(self.main_network.device)
+        action_mem = (tensor(self.action_memory[np.where(state_memory)], dtype=torch.float32)
+                      .to(self.main_network.device))
         memory_hist = torch.histc(action_mem, bins=actions.size(0), min=-1e-8, max=actions.size(0) + 1e-8) + 1
-        ucb = self.exploration_factor * torch.sqrt(np.log(iteration) / memory_hist)
+        ucb = self.exploration_factor * torch.sqrt(np.log(self.iteration) / memory_hist)
 
         action = torch.argmax(actions + ucb).item()
+        self.iteration += 1
 
         if action == torch.argmax(actions).item():
             self.exploitation += 1
         else:
             self.exploration += 1
-        if verbose and iteration % 200 == 0:
+        if verbose and self.iteration % 200 == 0:
             print("State:", state, "Downsampled:", downsampled_state)
             print("Histogram", memory_hist)
             print("UCB:", ucb, "Actions:", actions)
