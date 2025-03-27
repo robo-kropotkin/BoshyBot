@@ -85,27 +85,24 @@ class BoshyAgent:
             print("Action: ", action, "Max Q:", torch.argmax(actions).item())
         return action
 
-    def learn_monte_carlo(self, verbose=False):
+    def learn(self, verbose=False):
         if self.mem_cntr < self.batch_size + self.horizon:
             return
         self.main_network.optimizer.zero_grad()
         max_mem = min(self.mem_cntr - self.horizon, self.mem_size)
         batch = np.random.choice(max_mem, self.batch_size, replace=False)
         batch_index = np.arange(self.batch_size, dtype=np.int32)
-        horizon_indices = np.expand_dims(np.arange(self.horizon), axis=0).repeat(self.batch_size, axis=0)
+        horizon_indices = np.expand_dims(np.arange(self.horizon), axis=0).repeat(self.batch_size, axis=0) + 1
         new_indices = np.expand_dims(batch, axis=0).repeat(self.horizon, axis=0).transpose() + horizon_indices
         state_batch = tensor(self.state_memory[batch]).to(self.main_network.device)
-        # new_state_batch = tensor(self.state_memory[new_indices]).to(self.main_network.device)
+        horizon_state_batch = tensor(self.state_memory[batch + self.horizon]).to(self.main_network.device)
         reward_batch = tensor(self.reward_memory[new_indices]).to(self.main_network.device)
-        # terminal_batch = tensor(self.terminal_memory[new_indices]).to(self.main_network.device)
         action_batch = self.action_memory[batch]
 
         q_eval = self.main_network.forward(state_batch)[batch_index, action_batch]
-        # q_next = self.target_network.forward(new_state_batch)
-        # q_next[terminal_batch] = 0.0
         discounts = tensor(np.expand_dims(np.geomspace(1, self.gamma**(self.horizon - 1), num=self.horizon), axis=0)
                            .repeat(self.batch_size, axis=0), dtype=torch.float32).to(self.main_network.device)
-        q_target = (reward_batch * discounts).sum(dim=1)
+        q_target = (reward_batch * discounts).sum(dim=1) + self.main_network.forward(horizon_state_batch).max(dim=1)[0]
 
         loss = torch.sqrt(self.main_network.loss(q_target, q_eval).to(self.main_network.device))
         if loss < self.min_loss:

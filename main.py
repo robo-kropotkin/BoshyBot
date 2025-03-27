@@ -29,25 +29,6 @@ def setup_graph():
     win.activate()
 
 
-def keyboard_input(action):
-    if action == 0:
-        keyboard.press("left")
-    else:
-        keyboard.release("left")
-    if action == 1:
-        keyboard.press("right")
-    else:
-        keyboard.release("right")
-    if action == 2:
-        keyboard.press("x")
-        sleep(0.01)
-        keyboard.release("x")
-    if action == 3:
-        keyboard.press("z")
-    if action == 4:
-        keyboard.release("z")
-
-
 class BoshyController:
     def __init__(self, settings=None):
         self.epochs = settings.epochs if hasattr(settings, "epochs") else 10
@@ -55,12 +36,12 @@ class BoshyController:
         self.action_delay = settings.action_delay if hasattr(settings, "action_delay") else 0.075
         agent_settings = {
             "gamma": settings.gamma if hasattr(settings, "gamma") else 0.99,
-            "lr": settings.lr if hasattr(settings, "lr") else 0.03,
+            "lr": settings.lr if hasattr(settings, "lr") else 0.0003,
             "batch_size": settings.batch_size if hasattr(settings, "batch_size") else 64,
-            "n_actions": 5,
+            "n_actions": 7,
             "input_dims": 8,
             "mem_size": settings.mem_size if hasattr(settings, "mem_size") else 100000,
-            "horizon": settings.horizon if hasattr(settings, "horizon") else 40,
+            "horizon": settings.horizon if hasattr(settings, "horizon") else 5,
             "graph": settings.graph if hasattr(settings, "graph") else False,
             "exploration_factor": settings.exploration_factor if hasattr(settings, "exploration_factor") else 0.3,
             "x_grid": settings.x_grid if hasattr(settings, "x_grid") else 20,
@@ -103,12 +84,11 @@ class BoshyController:
 
     def step(self, state):
         action = self.agent.choose_action(state, verbose=True)
-        keyboard_input(action)
 
+        next_state, reward, done, info, _ = self.env.step(action, verbose=False)
         start_learning = datetime.now()
         while (datetime.now() - start_learning).total_seconds() < self.action_delay:
-            self.agent.learn_monte_carlo()
-        next_state, reward, done, info, _ = self.env.step(action, verbose=False)
+            self.agent.learn()
         self.agent.store_transition(state, action, reward, done)
         return next_state, done
 

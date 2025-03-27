@@ -107,8 +107,7 @@ class BoshyEnv(Env):
         sleep(0.02)
         keyboard.release("enter")
 
-    # Epoch is a parameter for tuning environment variables to different values on different epochs
-    def step(self, action, verbose=False, epoch=0):
+    def step(self, action, verbose=False):
         if self.j_streak != 0:
             self.j_streak += 1
             if action == 4:
@@ -137,10 +136,9 @@ class BoshyEnv(Env):
         self.steps += 1
         reward = 0
         reward -= 10 * (action == 2)
-        reward += np.random.normal(scale=0.1)
         subgoal = (0.43, 0.1)
         subgoal_distance = np.sqrt((self.x - subgoal[0]) ** 2 + (self.y - subgoal[1]) ** 2)
-        reward += subgoal_distance
+        reward -= subgoal_distance
         reward = max(min(reward, 100), -100)
         if verbose:
             print("X, Delta X, Delta Y, Reward")
