@@ -6,15 +6,26 @@ class QNet(nn.Module):
     def __init__(self, lr=0.03, input_dims=6, n_actions=5):
         super(QNet, self).__init__()
         self.input_dims = input_dims
-        self.final_layer = nn.Linear(128, n_actions)
-        nn.init.constant_(self.final_layer.bias, 0)
         self.model = nn.Sequential(
             nn.Linear(input_dims, 64),
-            nn.LeakyReLU(),
+            nn.ReLU(),
             nn.Linear(64, 128),
-            nn.LeakyReLU(),
-            nn.Dropout(0.8),
-            self.final_layer
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, n_actions)
         )
         self.model.apply(self.init_weights)
         self.optimizer = optim.Adam(self.parameters(), lr=lr)
@@ -28,5 +39,4 @@ class QNet(nn.Module):
     @staticmethod
     def init_weights(layer):
         if isinstance(layer, nn.Linear):
-            print("Initializing weights.")
             nn.init.xavier_uniform_(layer.weight)
