@@ -102,9 +102,7 @@ class BoshyEnv(Env):
                 break
 
         done = (self.y == 0 or self.y == 8)
-        reward = self.x - old_x
-        # if self.steps % 30 == 0:
-        #     print("Reward at step", self.steps, ":", reward)
+        reward = self.x + (self.x - old_x) * 1000
         observation = np.array((round(self.x, 3), round(self.y, 3)), dtype=np.float32)
         assert observation.shape == (BoshyEnv.input_dims(),)
         return observation, reward, done, False, {}

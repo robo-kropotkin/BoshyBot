@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from matplotlib import pyplot as plt
 from torch import tensor
 
 from QNet import QNet
@@ -22,81 +21,93 @@ class BoshyAgent:
         self.exploration_factor = settings["exploration_factor"]
         input_dims = settings["input_dims"]
         n_actions = settings["n_actions"]
-
-        self.exploration = 0
-        self.exploitation = 0
         self.iteration = 1
         self.mem_cntr = 0
+        self.exploration_chosen = 0
+        self.exploitation_chosen = 0
 
-        self.main_network = QNet(self.lr, n_actions=n_actions, input_dims=input_dims)
-        self.critic_network = QNet(self.lr, n_actions=n_actions, input_dims=input_dims)
+        self.q_network = QNet(self.lr, n_actions=n_actions, input_dims=input_dims)
+        self.target_network = QNet(self.lr, n_actions=n_actions, input_dims=input_dims)
+        self.target_network.load_state_dict(self.q_network.state_dict())
+        self.target_network.eval()
+
+        self.target_update_freq = 1000
+        self.learn_step_counter = 0
+
         self.state_memory = np.zeros((self.mem_size, input_dims), dtype=np.float32)
+        self.next_state_memory = np.zeros((self.mem_size, input_dims), dtype=np.float32)
         self.action_memory = np.zeros(self.mem_size, dtype=np.int32)
         self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
-        self.terminal_memory = np.zeros(self.mem_size, bool)
+        self.terminal_memory = np.zeros(self.mem_size, dtype=bool)
 
-    def store_transition(self, state, action, reward, done):
+    def store_transition(self, state, action, reward, done, next_state=None):
         index = self.mem_cntr % self.mem_size
         self.state_memory[index] = state
+        if next_state is not None:
+            self.next_state_memory[index] = next_state
         self.reward_memory[index] = reward
         self.action_memory[index] = action
         self.terminal_memory[index] = done
         self.mem_cntr += 1
 
     def choose_action(self, observation: np.ndarray, verbose=False):
-        state = tensor(observation, dtype=torch.float32).to(self.main_network.device)
-        actions = self.main_network.forward(state)
+        state = tensor(observation, dtype=torch.float32).to(self.q_network.device)
+        actions = self.q_network.forward(state)
+
         action_mem = (tensor(self.action_memory[(self.state_memory == observation).all(1)], dtype=torch.float32)
-                      .to(self.main_network.device))
+                      .to(self.q_network.device))
         memory_hist = torch.histc(action_mem, bins=actions.size(0), min=0.0, max=12.0) + 1
         ucb = self.exploration_factor * torch.sqrt(np.log(self.iteration) / memory_hist)
 
         action = torch.argmax(actions + ucb).item()
-        self.iteration += 1
 
+        self.iteration += 1
         if action == torch.argmax(actions).item():
-            self.exploitation += 1
+            self.exploitation_chosen += 1
         else:
-            self.exploration += 1
-        if verbose and self.iteration % 200 == 0:
-            print("State:", state)
-            print("Histogram", memory_hist)
-            print("UCB:", ucb, "\nActions:", actions)
-            print("Exploitation:", self.exploitation, "Exploration:", self.exploration)
-            print("=================")
-            print("Action: ", action, "Max Q:", torch.argmax(actions).item())
+            self.exploration_chosen += 1
+        if self.iteration % 200 == 0:
+            print(f"Exploration chosen: {self.exploration_chosen}, Exploitation chosen: {self.exploitation_chosen}")
+            print(f"actions: {actions}, ucb: {ucb}")
         return action
 
     def learn(self, verbose=False):
-        if self.mem_cntr - 1 < self.batch_size:
+        if self.mem_cntr < self.batch_size:
             return
-        device = self.main_network.device
-        self.critic_network.optimizer.zero_grad()
-        max_mem = min(self.mem_cntr - 1, self.mem_size)
-        # e.g. [3, 7, 2, 1, 0]
-        batch = np.random.choice(max_mem, self.batch_size, replace=False)
-        # e.g. [0, 1, 2, 3, 4]
-        batch_index = np.arange(self.batch_size, dtype=np.int32)
-        # e.g. [(0.1, 0.2), (0.04, 0.8), (0.2, 0.9)...]
+
+        if self.learn_step_counter % self.target_update_freq == 0:
+            self.target_network.load_state_dict(self.q_network.state_dict())
+            if verbose:
+                print("Target network updated")
+
+        self.learn_step_counter += 1
+
+        device = self.q_network.device
+
+        max_mem = min(self.mem_cntr, self.mem_size)
+        batch_size = min(self.batch_size, max_mem)
+        batch = np.random.choice(max_mem, batch_size, replace=False)
+
+        batch_index = np.arange(batch_size, dtype=np.int32)
+
         state_batch = tensor(self.state_memory[batch]).to(device)
-        next_state_batch = tensor(self.state_memory[batch + 1]).to(device)
-        # e.g. [0.1, 0.04, 0.2...]
+        next_state_batch = tensor(self.next_state_memory[batch]).to(device)
         reward_batch = tensor(self.reward_memory[batch]).to(device)
-        # e.g. [0, 9, 13...]
+        terminal_batch = tensor(self.terminal_memory[batch]).to(device)
         action_batch = self.action_memory[batch]
 
-        q_eval = self.critic_network.forward(state_batch)[batch_index, action_batch]
-        q_target = reward_batch + self.gamma * self.critic_network.forward(next_state_batch).max(dim=1)[0]
+        self.q_network.optimizer.zero_grad()
 
-        loss = torch.sqrt(self.critic_network.loss(q_target, q_eval).to(device))
+        q_eval = self.q_network.forward(state_batch)[batch_index, action_batch]
+        with torch.no_grad():
+            q_next = self.target_network.forward(next_state_batch)
+            q_next[terminal_batch] = 0.0  # Set Q-values to 0 for terminal states
+            q_target = reward_batch + self.gamma * torch.max(q_next, dim=1)[0]
+
+        loss = self.q_network.loss(q_target, q_eval).to(device)
+
+        if self.mem_cntr % 1000 == 0:
+            print(f"Loss: {loss.item()}")
+
         loss.backward()
-        self.critic_network.optimizer.step()
-
-    def print_bias(self):
-        for seq in self.main_network.children():
-            i = 0
-            for child in seq.children():
-                i += 1
-                if i == 5:
-                    print("Bias:")
-                    print(child.state_dict()['bias'])
+        self.q_network.optimizer.step()
