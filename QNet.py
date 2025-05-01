@@ -3,23 +3,32 @@ from torch import nn, optim
 
 
 class QNet(nn.Module):
-    def __init__(self, lr=0.03, input_dims=6, n_actions=5):
+    def __init__(self, lr=0.01, input_dims=6, n_actions=5):
         super(QNet, self).__init__()
         self.input_dims = input_dims
-        self.final_layer = nn.Linear(128, n_actions)
-        nn.init.constant_(self.final_layer.bias, 0)
+
+        # Simplified network with fewer layers and better initialization
         self.model = nn.Sequential(
             nn.Linear(input_dims, 64),
-            nn.LeakyReLU(),
+            nn.ReLU(),
             nn.Linear(64, 128),
-            nn.LeakyReLU(),
-            nn.Dropout(0.8),
-            self.final_layer
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, n_actions)
         )
+
+        # Apply weight initialization
         self.model.apply(self.init_weights)
-        self.optimizer = optim.Adam(self.parameters(), lr=lr)
-        self.loss = nn.MSELoss()
-        self.device = torch.device("cuda:0")
+
+        # Use a gradient clipping optimizer
+        self.optimizer = optim.Adam(self.parameters(), lr=lr, weight_decay=1e-4)
+        self.loss = nn.HuberLoss()  # Huber loss is more robust for DQN than MSE
+
+        # Set device
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.to(self.device)
 
     def forward(self, x):
@@ -28,5 +37,8 @@ class QNet(nn.Module):
     @staticmethod
     def init_weights(layer):
         if isinstance(layer, nn.Linear):
-            print("Initializing weights.")
-            nn.init.xavier_uniform_(layer.weight)
+            # Use a smaller initialization scale
+            nn.init.xavier_uniform_(layer.weight, gain=0.01)
+            # Initialize biases to small values
+            if layer.bias is not None:
+                nn.init.constant_(layer.bias, 0.01)
