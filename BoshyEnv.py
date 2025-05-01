@@ -21,6 +21,7 @@ class BoshyEnv(Env):
         self.x = self.y = 0.0
         self.level_width = 4000
         self.level_height = 500
+        self.history = np.zeros((40, 10))
 
     def reset(self, seed=None, options=None):
         keyboard.release("z")
@@ -102,7 +103,8 @@ class BoshyEnv(Env):
                 break
 
         done = (self.y == 0 or self.y == 8)
-        reward = self.x + (self.x - old_x) * 1000
+        self.history[int(self.x * 40)][int(self.y * 10)] += 1
+        reward = self.x + (self.x - old_x) * 1000 + 10 / self.history[int(self.x * 40)][int(self.y * 10)]
         observation = np.array((round(self.x, 3), round(self.y, 3)), dtype=np.float32)
         assert observation.shape == (BoshyEnv.input_dims(),)
         return observation, reward, done, False, {}

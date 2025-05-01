@@ -57,7 +57,7 @@ class BoshyAgent:
         action_mem = (tensor(self.action_memory[(self.state_memory == observation).all(1)], dtype=torch.float32)
                       .to(self.q_network.device))
         memory_hist = torch.histc(action_mem, bins=actions.size(0), min=0.0, max=12.0) + 1
-        ucb = self.exploration_factor * torch.sqrt(np.log(self.iteration) / memory_hist)
+        ucb = self.exploration_factor * torch.sqrt(np.log(self.iteration) / torch.sqrt(memory_hist))
 
         action = torch.argmax(actions + ucb).item()
 
