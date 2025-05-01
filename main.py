@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from matplotlib import pyplot as plt
 
@@ -8,6 +9,8 @@ import torch
 from BoshyAgent import BoshyAgent
 from BoshyEnv import BoshyEnv
 
+open_vm_command = "open_vm.ps1"
+machine_path = r"C:\Users\ygils\VirtualBox VMs\Boshy_Lubuntu1\Boshy_Lubuntu1.vbox"
 torch.set_printoptions(precision=2)
 action_map = [0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13]
 ACTION_DELAY = 0.2
@@ -23,7 +26,7 @@ class BoshyController:
         agent_settings = {
             "gamma": settings.gamma if hasattr(settings, "gamma") else GAMMA,
             "lr": settings.lr if hasattr(settings, "lr") else 0.03,
-            "batch_size": settings.batch_size if hasattr(settings, "batch_size") else 64,
+            "batch_size": settings.batch_size if hasattr(settings, "batch_size") else 512,
             "n_actions": 12,
             "input_dims": BoshyEnv.input_dims(),
             "mem_size": settings.mem_size if hasattr(settings, "mem_size") else 100000,
@@ -37,6 +40,8 @@ class BoshyController:
         for epoch in range(self.epochs):
             self.run_epoch()
             if keyboard.is_pressed("q"):
+                print("Exiting...")
+                self.agent.save_model()
                 break
 
         self.env.close()
@@ -53,7 +58,7 @@ class BoshyController:
                 break
 
     def step(self, state):
-        action = self.agent.choose_action(state, verbose=True)
+        action = self.agent.choose_action(state)
         press = action_map[action]
         if press & 1:
             keyboard.press("z")
@@ -71,12 +76,10 @@ class BoshyController:
             keyboard.press("x")
         else:
             keyboard.release("x")
-
-        start_learning = datetime.now()
-        while (datetime.now() - start_learning).total_seconds() < self.action_delay:
-            self.agent.learn()
+        time.sleep(ACTION_DELAY)
         next_state, reward, done, info, _ = self.env.step(action, verbose=False)
         self.agent.store_transition(state, action, reward, done)
+        self.agent.learn()
         return next_state, done
 
     def close(self):

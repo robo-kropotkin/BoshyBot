@@ -13,7 +13,8 @@ class BoshyEnv(Env):
     def input_dims(cls):
         return 2
 
-    def __init__(self, level=0):
+    def __init__(self, n_actions=12):
+        self.n_actions = n_actions
         self.rwm = ReadWriteMemory()
         self.process = None
         self.process_handle = None
@@ -21,6 +22,8 @@ class BoshyEnv(Env):
         self.x = self.y = 0.0
         self.level_width = 4000
         self.level_height = 500
+        self.history = None
+        self.steps = 0
 
     def reset(self, seed=None, options=None):
         keyboard.release("z")
@@ -38,7 +41,7 @@ class BoshyEnv(Env):
         return self.get_state()
 
     def get_state(self):
-        state = np.array((self.x, self.y))
+        state = np.array((round(self.x, 2), round(self.y, 2)), dtype=np.float32)
         assert state.shape == (BoshyEnv.input_dims(),)
         return state
 
@@ -94,6 +97,7 @@ class BoshyEnv(Env):
         keyboard.release("enter")
 
     def step(self, action, verbose=False):
+        self.steps += 1
         old_x = self.x
         # Coordinates bug out sometimes
         for i in range(100):
@@ -103,9 +107,9 @@ class BoshyEnv(Env):
 
         done = (self.y == 0 or self.y == 8)
         reward = self.x - old_x
-        # if self.steps % 30 == 0:
-        #     print("Reward at step", self.steps, ":", reward)
-        observation = np.array((round(self.x, 3), round(self.y, 3)), dtype=np.float32)
+        if self.steps % 40 == 0:
+            print(f"Reward at step {self.steps}: " + str(reward))
+        observation = self.get_state()
         assert observation.shape == (BoshyEnv.input_dims(),)
         return observation, reward, done, False, {}
 
