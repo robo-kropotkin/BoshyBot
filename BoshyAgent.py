@@ -62,10 +62,11 @@ class BoshyAgent:
         action = torch.argmax(actions + ucb).item()
 
         self.iteration += 1
-        if action == torch.argmax(actions).item():
-            self.exploitation_chosen += 1
-        else:
-            self.exploration_chosen += 1
+        if torch.sum(memory_hist) > 12:
+            if action == torch.argmax(actions).item():
+                self.exploitation_chosen += 1
+            else:
+                self.exploration_chosen += 1
         if self.iteration % 200 == 0:
             print(f"Exploration chosen: {self.exploration_chosen}, Exploitation chosen: {self.exploitation_chosen}")
             print(f"actions: {actions}, ucb: {ucb}")
